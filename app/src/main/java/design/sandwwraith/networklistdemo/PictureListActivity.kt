@@ -1,19 +1,22 @@
 package design.sandwwraith.networklistdemo
 
 import android.content.Intent
+import android.os.AsyncTask
 import android.os.Bundle
 import android.support.v7.app.AppCompatActivity
 import android.support.v7.widget.RecyclerView
-import android.support.design.widget.Snackbar
-import android.view.LayoutInflater
-import android.view.View
-import android.view.ViewGroup
+import android.util.Log
+import android.view.*
 import android.widget.TextView
-
-import design.sandwwraith.networklistdemo.dummy.DummyContent
-import kotlinx.android.synthetic.main.activity_picture_list.*
-import kotlinx.android.synthetic.main.picture_list_content.view.*
+import com.fasterxml.jackson.core.type.TypeReference
+import com.fasterxml.jackson.databind.DeserializationFeature
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import design.sandwwraith.networklistdemo.dummy.Photo
 import kotlinx.android.synthetic.main.picture_list.*
+import kotlinx.android.synthetic.main.picture_list_content.view.*
+import java.lang.ref.WeakReference
+import java.net.URL
+import javax.net.ssl.HttpsURLConnection
 
 /**
  * An activity representing a list of Pings. This activity
@@ -43,16 +46,43 @@ class PictureListActivity : AppCompatActivity() {
             twoPane = true
         }
 
-        setupRecyclerView(picture_list)
+        // Напишите unsplash.api.key="ВАШ_АПИ_КЛЮЧ_В_КАВЫЧКАХ" в local.properties
+        UnsplashAsyncTask(WeakReference(this)).execute("https://api.unsplash.com/photos?per_page=30&client_id=${BuildConfig.UnsplashApiKey}")
     }
 
-    private fun setupRecyclerView(recyclerView: RecyclerView) {
-        recyclerView.adapter = SimpleItemRecyclerViewAdapter(this, DummyContent.ITEMS, twoPane)
+    private fun setupRecyclerView(content: List<Photo>) {
+        picture_list.adapter = SimpleItemRecyclerViewAdapter(this, content, twoPane)
+    }
+
+
+    class UnsplashAsyncTask(private val activityRef: WeakReference<PictureListActivity>) : AsyncTask<String, Unit, List<Photo>>() {
+        private val mapper =
+            jacksonObjectMapper().apply { configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false) }
+
+        override fun doInBackground(vararg params: String?): List<Photo> {
+            return URL(params[0]).openConnection().run {
+                connect()
+                this as HttpsURLConnection
+                if (responseCode / 100 != 2) {
+                    Log.d("ASYNC_TASK", "Response code: $responseCode")
+                    cancel(true)
+                }
+                inputStream.use {
+                    mapper.readValue<List<Photo>>(it, object : TypeReference<List<Photo>>() {})
+                }
+            }
+        }
+
+        override fun onPostExecute(result: List<Photo>?) {
+            if (result == null) return
+            Log.d("ASYNC_TASK", "Result size: ${result.size}")
+            activityRef.get()?.setupRecyclerView(result)
+        }
     }
 
     class SimpleItemRecyclerViewAdapter(
         private val parentActivity: PictureListActivity,
-        private val values: List<DummyContent.DummyItem>,
+        private val values: List<Photo>,
         private val twoPane: Boolean
     ) :
         RecyclerView.Adapter<SimpleItemRecyclerViewAdapter.ViewHolder>() {
@@ -61,11 +91,11 @@ class PictureListActivity : AppCompatActivity() {
 
         init {
             onClickListener = View.OnClickListener { v ->
-                val item = v.tag as DummyContent.DummyItem
+                val item = v.tag as Photo
                 if (twoPane) {
                     val fragment = PictureDetailFragment().apply {
                         arguments = Bundle().apply {
-                            putString(PictureDetailFragment.ARG_ITEM_ID, item.id)
+                            putString(PictureDetailFragment.ARG_ITEM_ID, item.urls.regular)
                         }
                     }
                     parentActivity.supportFragmentManager
@@ -74,7 +104,7 @@ class PictureListActivity : AppCompatActivity() {
                         .commit()
                 } else {
                     val intent = Intent(v.context, PictureDetailActivity::class.java).apply {
-                        putExtra(PictureDetailFragment.ARG_ITEM_ID, item.id)
+                        putExtra(PictureDetailFragment.ARG_ITEM_ID, item.urls.regular)
                     }
                     v.context.startActivity(intent)
                 }
@@ -90,7 +120,8 @@ class PictureListActivity : AppCompatActivity() {
         override fun onBindViewHolder(holder: ViewHolder, position: Int) {
             val item = values[position]
             holder.idView.text = item.id
-            holder.contentView.text = item.content
+            val desc = item.description?.let { "$it by " } ?: ""
+            holder.contentView.text = "$desc${item.user.name} has ${item.likes} likes"
 
             with(holder.itemView) {
                 tag = item
